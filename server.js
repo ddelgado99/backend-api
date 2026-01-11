@@ -159,6 +159,46 @@ app.delete("/products/:id", (req, res) => {
 });
 
 // =======================
+// VISIT TRACKING (ADMIN)
+// =======================
+// Nota: Al usar una variable en memoria, los datos se reinician si el servidor se reinicia.
+// Para guardar permanentemente, deberías crear una tabla 'visits' en MySQL.
+let visits = []; 
+
+// 1. Registrar visita
+app.post("/track-visit", (req, res) => {
+  const now = new Date();
+  visits.push(now);
+  // Opcional: Limitar el array para que no crezca infinitamente en memoria
+  if (visits.length > 5000) visits.shift(); 
+  
+  console.log(`👀 Visita registrada: ${now.toISOString()}`);
+  res.json({ status: "ok" });
+});
+
+// 2. Obtener estadísticas
+app.get("/admin/stats", (req, res) => {
+  const stats = {};
+
+  visits.forEach(date => {
+    // Agrupar por Año-Mes (ej: 2023-10)
+    const monthKey = date.toISOString().slice(0, 7); 
+    if (!stats[monthKey]) {
+      stats[monthKey] = 0;
+    }
+    stats[monthKey]++;
+  });
+
+  // Convertir a formato lista para el frontend
+  const result = Object.keys(stats).map(key => ({
+    month: key,
+    count: stats[key]
+  })).sort((a, b) => b.month.localeCompare(a.month)); // Ordenar descendente
+
+  res.json(result);
+});
+
+// =======================
 // SERVER
 // =======================
 const PORT = process.env.PORT || 10000;
