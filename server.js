@@ -1,7 +1,7 @@
 // =======================
-// ENV (compatible ESM + Node 24)
+// ENV (Node 24 + ESM)
 // =======================
-import 'dotenv/config';
+import "dotenv/config";
 
 import express from "express";
 import mysql from "mysql2";
@@ -20,29 +20,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // =======================
-// STATIC FILES
+// ROOT (health check)
 // =======================
-app.use(express.static(path.join(__dirname, "public")));
-
-// =======================
-// ENV DEBUG (temporal)
-// =======================
-console.log("ENV CHECK:");
-console.log("HOST:", process.env.MYSQLHOST);
-console.log("USER:", process.env.MYSQLUSER);
-console.log("PASS:", process.env.MYSQLPASSWORD ? "OK" : "NO");
-console.log("DB:", process.env.MYSQLDATABASE);
-console.log("PORT:", process.env.MYSQLPORT);
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    message: "🚀 Backend funcionando correctamente",
+  });
+});
 
 // =======================
 // MYSQL CONNECTION
 // =======================
 const db = mysql.createConnection({
-  host: process.env.MYSQLHOST || "localhost",
-  user: process.env.MYSQLUSER || "root",
-  password: process.env.MYSQLPASSWORD || "",
+  host: process.env.MYSQLHOST,
+  user: process.env.MYSQLUSER,
+  password: process.env.MYSQLPASSWORD,
   database: process.env.MYSQLDATABASE,
-  port: Number(process.env.MYSQLPORT) || 3306
+  port: Number(process.env.MYSQLPORT) || 3306,
 });
 
 db.connect(err => {
@@ -75,7 +70,7 @@ app.post("/products", (req, res) => {
     image_main,
     image_thumb1,
     image_thumb2,
-    image_thumb3
+    image_thumb3,
   } = req.body;
 
   const sql = `
@@ -92,7 +87,7 @@ app.post("/products", (req, res) => {
     image_main || null,
     image_thumb1 || null,
     image_thumb2 || null,
-    image_thumb3 || null
+    image_thumb3 || null,
   ];
 
   db.query(sql, values, (err, result) => {
@@ -115,7 +110,7 @@ app.put("/products/:id", (req, res) => {
     image_main,
     image_thumb1,
     image_thumb2,
-    image_thumb3
+    image_thumb3,
   } = req.body;
 
   const sql = `
@@ -140,7 +135,7 @@ app.put("/products/:id", (req, res) => {
     image_thumb1 || null,
     image_thumb2 || null,
     image_thumb3 || null,
-    id
+    id,
   ];
 
   db.query(sql, values, err => {
@@ -170,4 +165,3 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log("🚀 Server running on port", PORT);
 });
-
