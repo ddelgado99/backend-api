@@ -15,8 +15,7 @@ import { createClient } from "@supabase/supabase-js";
 const app = express();
 app.use(cors());
 
-// ⚠️ NO express.json() porque usamos multipart
-// app.use(express.json());
+// ⚠️ NO express.json() porque usamos multipart/form-data
 
 // =======================
 // SUPABASE
@@ -75,15 +74,16 @@ async function uploadToSupabase(file) {
     .from("products")
     .getPublicUrl(fileName);
 
-  return { url: data.publicUrl, path: fileName };
+  return data.publicUrl;
 }
 
 async function deleteFromSupabase(url) {
   if (!url) return;
-  const path = url.split("/products/")[1];
-  if (!path) return;
+  const idx = url.indexOf("/products/");
+  if (idx === -1) return;
 
-  await supabase.storage.from("products").remove([`products/${path}`]);
+  const path = url.slice(idx + 1);
+  await supabase.storage.from("products").remove([path]);
 }
 
 // =======================
@@ -91,19 +91,26 @@ async function deleteFromSupabase(url) {
 // =======================
 app.post("/products", upload.array("images", 5), async (req, res) => {
   try {
-    const { name, description = "", price = 0, discount = 0 } = req.body;
+    const {
+      name,
+      description = "",
+      price = 0,
+      discount = 0
+    } = req.body;
 
     if (!name || !req.files || !req.files.length) {
-      return res.status(400).json({ error: "Nombre e imágenes obligatorias" });
+      return res.status(400).json({
+        error: "Nombre e imágenes obligatorias"
+      });
     }
 
-    const uploaded = [];
+    const images = [];
     for (const file of req.files) {
-      uploaded.push(await uploadToSupabase(file));
+      const url = await uploadToSupabase(file);
+      images.push(url);
     }
 
-    const image_main = uploaded[0].url;
-    const images = uploaded.map(i => i.url);
+    const image_main = images[0];
 
     const [result] = await pool.query(
       `INSERT INTO products
@@ -127,7 +134,7 @@ app.post("/products", upload.array("images", 5), async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ create product:", err.message);
+    console.error("❌ create product:", err);
     res.status(500).json({ error: "server error" });
   }
 });
@@ -153,20 +160,27 @@ app.get("/products", async (_, res) => {
 app.put("/products/:id", upload.array("images", 5), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price = 0, discount = 0 } = req.body;
+    const {
+      name,
+      description = "",
+      price = 0,
+      discount = 0
+    } = req.body;
 
     const [rows] = await pool.query(
       "SELECT * FROM products WHERE id = ?",
       [id]
     );
-    if (!rows.length) return res.status(404).json({ error: "Not found" });
+    if (!rows.length) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
 
     let images = rows[0].images ? JSON.parse(rows[0].images) : [];
 
     if (req.files && req.files.length) {
       for (const file of req.files) {
-        const up = await uploadToSupabase(file);
-        images.push(up.url);
+        const url = await uploadToSupabase(file);
+        images.push(url);
       }
     }
 
@@ -195,7 +209,7 @@ app.put("/products/:id", upload.array("images", 5), async (req, res) => {
     res.json({ success: true });
 
   } catch (err) {
-    console.error("❌ update product:", err.message);
+    console.error("❌ update product:", err);
     res.status(500).json({ error: "update failed" });
   }
 });
@@ -219,12 +233,15 @@ app.delete("/products/:id", async (req, res) => {
       }
     }
 
-    await pool.query("DELETE FROM products WHERE id = ?", [id]);
+    await pool.query(
+      "DELETE FROM products WHERE id = ?",
+      [id]
+    );
 
     res.json({ success: true });
 
   } catch (err) {
-    console.error("❌ delete product:", err.message);
+    console.error("❌ delete product:", err);
     res.status(500).json({ error: "delete failed" });
   }
 });
@@ -233,6 +250,6 @@ app.delete("/products/:id", async (req, res) => {
 // SERVER
 // =======================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log("🚀 Server running on port", PORT)
-);
+app.listen(PORT, () => {
+  console.log("🚀 Server running on port", PORT);
+});
