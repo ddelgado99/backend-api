@@ -8,6 +8,8 @@ import mysql from "mysql2/promise";
 import cors from "cors";
 
 const app = express();
+
+// Configuración CORS permisiva para evitar bloqueos desde GitHub Pages
 app.use(cors());
 app.use(express.json());
 
@@ -44,20 +46,20 @@ const pool = mysql.createPool({
   keepAliveInitialDelay: 10000
 });
 
-// Test inicial (no mata el server si falla)
+// Test inicial de conexión
 (async () => {
   try {
     const conn = await pool.getConnection();
     await conn.ping();
     conn.release();
-    console.log("✅ MySQL pool conectado");
+    console.log("✅ MySQL pool conectado exitosamente");
   } catch (err) {
-    console.error("⚠️ MySQL aún no disponible:", err.message);
+    console.error("⚠️ Error conectando a MySQL:", err.message);
   }
 })();
 
 // =======================
-// KEEP DB ALIVE (IMPORTANTE)
+// KEEP DB ALIVE
 // =======================
 app.get("/keep-db-alive", async (req, res) => {
   try {
@@ -89,6 +91,8 @@ app.get("/products", async (req, res) => {
 // =======================
 app.post("/products", async (req, res) => {
   try {
+    console.log("📥 Recibiendo nuevo producto:", req.body); // Log para depuración
+
     const {
       name,
       description,
@@ -118,10 +122,11 @@ app.post("/products", async (req, res) => {
     ];
 
     const [result] = await pool.query(sql, values);
+    console.log("✅ Producto creado con ID:", result.insertId);
     res.json({ success: true, id: result.insertId });
 
   } catch (err) {
-    console.error("❌ create product error:", err.message);
+    console.error("❌ Error creando producto:", err.message);
     res.status(500).json({ error: "insert failed" });
   }
 });
@@ -132,6 +137,7 @@ app.post("/products", async (req, res) => {
 app.put("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
+    console.log(`📥 Actualizando producto ID ${id}:`, req.body); // Log para depuración
 
     const {
       name,
@@ -170,10 +176,11 @@ app.put("/products/:id", async (req, res) => {
     ];
 
     await pool.query(sql, values);
+    console.log(`✅ Producto ID ${id} actualizado`);
     res.json({ success: true });
 
   } catch (err) {
-    console.error("❌ update error:", err.message);
+    console.error("❌ Error actualizando producto:", err.message);
     res.status(500).json({ error: "update failed" });
   }
 });
@@ -183,13 +190,16 @@ app.put("/products/:id", async (req, res) => {
 // =======================
 app.delete("/products/:id", async (req, res) => {
   try {
+    const { id } = req.params;
+    console.log(`🗑️ Eliminando producto ID ${id}`);
+    
     await pool.query(
       "DELETE FROM products WHERE id = ?",
-      [req.params.id]
+      [id]
     );
     res.json({ success: true });
   } catch (err) {
-    console.error("❌ delete error:", err.message);
+    console.error("❌ Error eliminando producto:", err.message);
     res.status(500).json({ error: "delete failed" });
   }
 });
