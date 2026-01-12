@@ -2,40 +2,32 @@
 // ENV (Node 24 + ESM)
 // =======================
 import "dotenv/config";
+
 import express from "express";
 import mysql from "mysql2/promise";
 import cors from "cors";
-import multer from "multer";
-import { createClient } from "@supabase/supabase-js";
 
-// =======================
-// APP CONFIG
-// =======================
 const app = express();
-
-// Enable CORS for all origins (Fixes frontend connection issues)
 app.use(cors());
-app.use(express.json()); // Important to parse JSON bodies
+app.use(express.json());
 
 // =======================
-// SUPABASE CONFIG
+// HEALTH (Render ping)
 // =======================
-// Ensure your Bucket in Supabase is set to "Public"
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    message: "🚀 Backend activo",
+    time: new Date().toISOString()
+  });
+});
 
-// =======================
-// MULTER CONFIG
-// =======================
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
 });
 
 // =======================
-// MYSQL CONFIG
+// MYSQL POOL (ANTI SLEEP)
 // =======================
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST,
@@ -43,209 +35,169 @@ const pool = mysql.createPool({
   password: process.env.MYSQLPASSWORD,
   database: process.env.MYSQLDATABASE,
   port: Number(process.env.MYSQLPORT) || 3306,
+
   waitForConnections: true,
   connectionLimit: 10,
+  queueLimit: 0,
+
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000
 });
 
-// =======================
-// HELPERS
-// =======================
-async function uploadImage(file) {
-  // Sanitize filename to avoid special char issues
-  const ext = file.originalname.split(".").pop();
-  const fileName = `products/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
-
-  const { error } = await supabase.storage
-    .from("products")
-    .upload(fileName, file.buffer, {
-      contentType: file.mimetype,
-      upsert: false
-    });
-
-  if (error) {
-    console.error("Supabase Upload Error:", error);
-    throw new Error("Error uploading image");
-  }
-
-  const { data } = supabase.storage
-    .from("products")
-    .getPublicUrl(fileName);
-
-  return data.publicUrl;
-}
-
-async function deleteImage(url) {
-  if (!url) return;
-  
-  // Robust logic to extract the path from the full URL
-  // Example URL: https://xyz.supabase.co/.../public/products/products/filename.jpg
+// Test inicial (no mata el server si falla)
+(async () => {
   try {
-    const urlObj = new URL(url);
-    const pathParts = urlObj.pathname.split("/products/"); 
-    // Assuming bucket name is 'products', the path inside bucket is after the last segment
-    if (pathParts.length > 1) {
-      // Reconstruct the path inside the bucket (e.g., "products/filename.jpg")
-      // We use decodeURIComponent to handle spaces/special chars in URLs
-      const filePath = decodeURIComponent(`products/${pathParts[pathParts.length - 1]}`);
-      
-      const { error } = await supabase.storage
-        .from("products")
-        .remove([filePath]);
-        
-      if (error) console.error("Delete Error:", error);
-    }
-  } catch (e) {
-    console.error("Error parsing URL for delete:", e);
+    const conn = await pool.getConnection();
+    await conn.ping();
+    conn.release();
+    console.log("✅ MySQL pool conectado");
+  } catch (err) {
+    console.error("⚠️ MySQL aún no disponible:", err.message);
   }
-}
+})();
 
 // =======================
-// ROUTES
+// KEEP DB ALIVE (IMPORTANTE)
 // =======================
-
-// Health Check
-app.get("/", (_, res) => {
-  res.json({ status: "ok", timestamp: new Date() });
-});
-
-// GET Products
-app.get("/products", async (_, res) => {
+app.get("/keep-db-alive", async (req, res) => {
   try {
-    const [rows] = await pool.query("SELECT * FROM products ORDER BY id DESC");
-    res.json(rows);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Database error" });
+    await pool.query("SELECT 1");
+    res.status(200).send("db alive");
+  } catch (err) {
+    console.error("❌ keep-db-alive error:", err.message);
+    res.status(500).send("db error");
   }
 });
 
-// CREATE Product
-// Note: Frontend must use <input type="file" name="images" multiple>
-app.post("/products", upload.array("images", 4), async (req, res) => {
+// =======================
+// GET PRODUCTS
+// =======================
+app.get("/products", async (req, res) => {
   try {
-    const { name, description = "", price = 0, discount = 0 } = req.body;
-
-    // Validate required fields
-    if (!name) {
-      return res.status(400).json({ error: "Nombre es requerido" });
-    }
-
-    const urls = [];
-    if (req.files && req.files.length > 0) {
-      for (const f of req.files) {
-        const url = await uploadImage(f);
-        urls.push(url);
-      }
-    }
-
-    // Ensure we have 4 slots, fill empty with null
-    const [result] = await pool.query(
-      `INSERT INTO products 
-       (name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        name,
-        description,
-        Number(price),
-        Number(discount),
-        urls[0] || null,
-        urls[1] || null,
-        urls[2] || null,
-        urls[3] || null,
-      ]
+    const [rows] = await pool.query(
+      "SELECT * FROM products ORDER BY id DESC"
     );
-
-    res.json({ success: true, id: result.insertId, images: urls });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Server error creating product" });
+    res.json(rows);
+  } catch (err) {
+    console.error("❌ /products error:", err.message);
+    res.status(500).json({ error: "database unavailable" });
   }
 });
 
-// UPDATE Product
-app.put("/products/:id", upload.array("images", 4), async (req, res) => {
+// =======================
+// CREATE PRODUCT
+// =======================
+app.post("/products", async (req, res) => {
+  try {
+    const {
+      name,
+      description,
+      price,
+      discount,
+      image_main,
+      image_thumb1,
+      image_thumb2,
+      image_thumb3,
+    } = req.body;
+
+    const sql = `
+      INSERT INTO products
+      (name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+
+    const values = [
+      name,
+      description,
+      Number(price) || 0,
+      Number(discount) || 0,
+      image_main || null,
+      image_thumb1 || null,
+      image_thumb2 || null,
+      image_thumb3 || null,
+    ];
+
+    const [result] = await pool.query(sql, values);
+    res.json({ success: true, id: result.insertId });
+
+  } catch (err) {
+    console.error("❌ create product error:", err.message);
+    res.status(500).json({ error: "insert failed" });
+  }
+});
+
+// =======================
+// UPDATE PRODUCT
+// =======================
+app.put("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, price, discount } = req.body;
 
-    // 1. Get current product data
-    const [rows] = await pool.query("SELECT * FROM products WHERE id = ?", [id]);
-    if (!rows.length) return res.status(404).json({ error: "Not found" });
+    const {
+      name,
+      description,
+      price,
+      discount,
+      image_main,
+      image_thumb1,
+      image_thumb2,
+      image_thumb3,
+    } = req.body;
 
-    const currentProduct = rows[0];
+    const sql = `
+      UPDATE products SET
+        name = ?,
+        description = ?,
+        price = ?,
+        discount = ?,
+        image_main = ?,
+        image_thumb1 = ?,
+        image_thumb2 = ?,
+        image_thumb3 = ?
+      WHERE id = ?
+    `;
 
-    // 2. Collect existing images (filter out nulls)
-    let finalImages = [
-      currentProduct.image_main,
-      currentProduct.image_thumb1,
-      currentProduct.image_thumb2,
-      currentProduct.image_thumb3,
-    ].filter(Boolean);
+    const values = [
+      name,
+      description,
+      Number(price) || 0,
+      Number(discount) || 0,
+      image_main || null,
+      image_thumb1 || null,
+      image_thumb2 || null,
+      image_thumb3 || null,
+      id,
+    ];
 
-    // 3. Add NEW images if uploaded
-    if (req.files && req.files.length > 0) {
-      for (const f of req.files) {
-        const url = await uploadImage(f);
-        finalImages.push(url);
-      }
-    }
+    await pool.query(sql, values);
+    res.json({ success: true });
 
-    // 4. Enforce limit of 4 images (Keep the newest ones or oldest ones? 
-    // Logic here: Keep the first 4. If you want to replace, you should delete first or use a different logic)
-    // To fix "only allows one": We ensure the array is sliced correctly.
-    finalImages = finalImages.slice(0, 4);
-
-    await pool.query(
-      `UPDATE products SET 
-       name=?, description=?, price=?, discount=?, 
-       image_main=?, image_thumb1=?, image_thumb2=?, image_thumb3=?
-       WHERE id=?`,
-      [
-        name || currentProduct.name,
-        description || currentProduct.description,
-        Number(price) || currentProduct.price,
-        Number(discount) || currentProduct.discount,
-        finalImages[0] || null,
-        finalImages[1] || null,
-        finalImages[2] || null,
-        finalImages[3] || null,
-        id,
-      ]
-    );
-
-    res.json({ success: true, images: finalImages });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Update error" });
+  } catch (err) {
+    console.error("❌ update error:", err.message);
+    res.status(500).json({ error: "update failed" });
   }
 });
 
-// DELETE Product
+// =======================
+// DELETE PRODUCT
+// =======================
 app.delete("/products/:id", async (req, res) => {
   try {
-    const { id } = req.params;
-
-    const [rows] = await pool.query("SELECT * FROM products WHERE id=?", [id]);
-
-    if (rows.length) {
-      const p = rows[0];
-      // Delete all associated images from Supabase
-      await Promise.all([
-        deleteImage(p.image_main),
-        deleteImage(p.image_thumb1),
-        deleteImage(p.image_thumb2),
-        deleteImage(p.image_thumb3),
-      ]);
-    }
-
-    await pool.query("DELETE FROM products WHERE id=?", [id]);
+    await pool.query(
+      "DELETE FROM products WHERE id = ?",
+      [req.params.id]
+    );
     res.json({ success: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Delete error" });
+  } catch (err) {
+    console.error("❌ delete error:", err.message);
+    res.status(500).json({ error: "delete failed" });
   }
 });
 
 // =======================
+// SERVER
+// =======================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log("🚀 Server running on port", PORT);
+});
