@@ -19,13 +19,13 @@ app.use(express.json());
 // =======================
 // SUPABASE
 // =======================
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
-  console.error("❌ Faltan variables SUPABASE en .env");
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+  console.error("❌ Faltan variables SUPABASE_URL o SUPABASE_SERVICE_KEY");
 }
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_KEY
 );
 
 // =======================
@@ -103,7 +103,7 @@ app.post("/upload-image", upload.single("image"), async (req, res) => {
     }
 
     const ext = req.file.originalname.split(".").pop();
-    const fileName = `products/${Date.now()}-${Math.random()
+    const fileName = `${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}.${ext}`;
 
@@ -126,7 +126,7 @@ app.post("/upload-image", upload.single("image"), async (req, res) => {
     return res.json({ url: data.publicUrl });
 
   } catch (err) {
-    console.error("❌ upload-image error:", err.message);
+    console.error("❌ upload-image error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
