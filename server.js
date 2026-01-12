@@ -15,7 +15,7 @@ import { createClient } from "@supabase/supabase-js";
 const app = express();
 app.use(cors());
 
-// ⚠️ NO express.json() para multipart
+// ⚠️ NO express.json() con multipart
 // app.use(express.json());
 
 // =======================
@@ -27,7 +27,7 @@ const supabase = createClient(
 );
 
 // =======================
-// MULTER (MEMORY)
+// MULTER
 // =======================
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -35,7 +35,7 @@ const upload = multer({
 });
 
 // =======================
-// MYSQL POOL
+// MYSQL
 // =======================
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST,
@@ -55,55 +55,63 @@ app.get("/", (_, res) => {
 });
 
 // =======================
-// CREATE PRODUCT + IMAGE
+// CREATE PRODUCT + IMAGES
 // =======================
-app.post("/products", upload.single("image"), async (req, res) => {
+app.post("/products", upload.array("images", 6), async (req, res) => {
   try {
     const { name, description = "", price = 0, discount = 0 } = req.body;
 
-    if (!name || !req.file) {
-      return res.status(400).json({ error: "Nombre e imagen obligatorios" });
+    if (!name || !req.files?.length) {
+      return res.status(400).json({ error: "Nombre e imágenes obligatorios" });
     }
 
-    // ---- upload image to supabase ----
-    const ext = req.file.originalname.split(".").pop();
-    const fileName = `products/${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2)}.${ext}`;
+    const uploadedUrls = [];
 
-    const { error: upErr } = await supabase.storage
-      .from("products")
-      .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype
-      });
+    for (const file of req.files) {
+      const ext = file.originalname.split(".").pop();
+      const fileName = `products/${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}.${ext}`;
 
-    if (upErr) {
-      console.error(upErr);
-      return res.status(500).json({ error: "Upload failed" });
+      const { error } = await supabase.storage
+        .from("products")
+        .upload(fileName, file.buffer, {
+          contentType: file.mimetype
+        });
+
+      if (error) throw error;
+
+      const { data } = supabase.storage
+        .from("products")
+        .getPublicUrl(fileName);
+
+      uploadedUrls.push(data.publicUrl);
     }
 
-    const { data } = supabase.storage
-      .from("products")
-      .getPublicUrl(fileName);
+    const imageMain = uploadedUrls[0];
 
-    const imageUrl = data.publicUrl;
-
-    // ---- insert product ----
     const [result] = await pool.query(
       `INSERT INTO products
-       (name, description, price, discount, image_main)
-       VALUES (?, ?, ?, ?, ?)`,
-      [name, description, Number(price), Number(discount), imageUrl]
+       (name, description, price, discount, image_main, images)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        name,
+        description,
+        Number(price),
+        Number(discount),
+        imageMain,
+        JSON.stringify(uploadedUrls)
+      ]
     );
 
     res.json({
       success: true,
       id: result.insertId,
-      image: imageUrl
+      images: uploadedUrls
     });
 
   } catch (err) {
-    console.error("❌ create product:", err.message);
+    console.error("❌ CREATE PRODUCT:", err);
     res.status(500).json({ error: "server error" });
   }
 });
@@ -115,7 +123,106 @@ app.get("/products", async (_, res) => {
   const [rows] = await pool.query(
     "SELECT * FROM products ORDER BY id DESC"
   );
+
+  rows.forEach(p => {
+    if (p.images) p.images = JSON.parse(p.images);
+  });
+
   res.json(rows);
+});
+
+// =======================
+// UPDATE PRODUCT
+// =======================
+app.put("/products/:id", upload.array("images", 6), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, price, discount } = req.body;
+
+    let images = [];
+
+    if (req.files?.length) {
+      for (const file of req.files) {
+        const ext = file.originalname.split(".").pop();
+        const fileName = `products/${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2)}.${ext}`;
+
+        await supabase.storage
+          .from("products")
+          .upload(fileName, file.buffer, {
+            contentType: file.mimetype
+          });
+
+        const { data } = supabase.storage
+          .from("products")
+          .getPublicUrl(fileName);
+
+        images.push(data.publicUrl);
+      }
+    }
+
+    const imageMain = images.length ? images[0] : null;
+
+    await pool.query(
+      `UPDATE products SET
+        name=?,
+        description=?,
+        price=?,
+        discount=?,
+        image_main=IFNULL(?, image_main),
+        images=IFNULL(?, images)
+       WHERE id=?`,
+      [
+        name,
+        description,
+        Number(price),
+        Number(discount),
+        imageMain,
+        images.length ? JSON.stringify(images) : null,
+        id
+      ]
+    );
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error("❌ UPDATE PRODUCT:", err);
+    res.status(500).json({ error: "server error" });
+  }
+});
+
+// =======================
+// DELETE PRODUCT + IMAGES
+// =======================
+app.delete("/products/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [[product]] = await pool.query(
+      "SELECT images FROM products WHERE id=?",
+      [id]
+    );
+
+    if (!product) return res.status(404).json({ error: "Not found" });
+
+    const images = JSON.parse(product.images || "[]");
+
+    for (const url of images) {
+      const path = url.split("/storage/v1/object/public/products/")[1];
+      if (path) {
+        await supabase.storage.from("products").remove([path]);
+      }
+    }
+
+    await pool.query("DELETE FROM products WHERE id=?", [id]);
+
+    res.json({ success: true });
+
+  } catch (err) {
+    console.error("❌ DELETE PRODUCT:", err);
+    res.status(500).json({ error: "server error" });
+  }
 });
 
 // =======================
@@ -123,5 +230,5 @@ app.get("/products", async (_, res) => {
 // =======================
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () =>
-  console.log("🚀 Server running on", PORT)
+  console.log("🚀 Server running on port", PORT)
 );
