@@ -6,10 +6,31 @@ import "dotenv/config";
 import express from "express";
 import mysql from "mysql2/promise";
 import cors from "cors";
+import { createClient } from "@supabase/supabase-js";
+import multer from "multer";
 
+// =======================
+// APP
+// =======================
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// =======================
+// SUPABASE
+// =======================
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
+// =======================
+// MULTER (MEMORY)
+// =======================
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
 
 // =======================
 // HEALTH (Render ping)
@@ -35,16 +56,14 @@ const pool = mysql.createPool({
   password: process.env.MYSQLPASSWORD,
   database: process.env.MYSQLDATABASE,
   port: Number(process.env.MYSQLPORT) || 3306,
-
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-
   enableKeepAlive: true,
   keepAliveInitialDelay: 10000
 });
 
-// Test inicial (no mata el server si falla)
+// Test inicial
 (async () => {
   try {
     const conn = await pool.getConnection();
@@ -57,7 +76,7 @@ const pool = mysql.createPool({
 })();
 
 // =======================
-// KEEP DB ALIVE (IMPORTANTE)
+// KEEP DB ALIVE
 // =======================
 app.get("/keep-db-alive", async (req, res) => {
   try {
@@ -66,6 +85,42 @@ app.get("/keep-db-alive", async (req, res) => {
   } catch (err) {
     console.error("❌ keep-db-alive error:", err.message);
     res.status(500).send("db error");
+  }
+});
+
+// =======================
+// UPLOAD IMAGE (SUPABASE)
+// =======================
+app.post("/upload-image", upload.single("image"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No se envió ninguna imagen" });
+    }
+
+    const ext = req.file.originalname.split(".").pop();
+    const fileName = `products/${Date.now()}.${ext}`;
+
+    const { error } = await supabase.storage
+      .from("products")
+      .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: false
+      });
+
+    if (error) {
+      console.error("❌ Supabase upload error:", error.message);
+      return res.status(500).json({ error: "Upload failed" });
+    }
+
+    const { data } = supabase.storage
+      .from("products")
+      .getPublicUrl(fileName);
+
+    res.json({ url: data.publicUrl });
+
+  } catch (err) {
+    console.error("❌ upload-image error:", err.message);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
