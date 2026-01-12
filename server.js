@@ -9,7 +9,7 @@ import cors from "cors";
 
 const app = express();
 
-// Configuración CORS permisiva para evitar bloqueos desde GitHub Pages
+// Configuración CORS permisiva
 app.use(cors());
 app.use(express.json());
 
@@ -31,6 +31,10 @@ app.get("/health", (req, res) => {
 // =======================
 // MYSQL POOL (ANTI SLEEP)
 // =======================
+if (!process.env.MYSQLHOST || !process.env.MYSQLUSER) {
+  console.warn("⚠️ ADVERTENCIA: Variables de entorno de MySQL no detectadas completamente.");
+}
+
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST,
   user: process.env.MYSQLUSER,
@@ -46,7 +50,6 @@ const pool = mysql.createPool({
   keepAliveInitialDelay: 10000
 });
 
-// Test inicial de conexión
 (async () => {
   try {
     const conn = await pool.getConnection();
@@ -58,9 +61,6 @@ const pool = mysql.createPool({
   }
 })();
 
-// =======================
-// KEEP DB ALIVE
-// =======================
 app.get("/keep-db-alive", async (req, res) => {
   try {
     await pool.query("SELECT 1");
@@ -72,13 +72,39 @@ app.get("/keep-db-alive", async (req, res) => {
 });
 
 // =======================
-// GET PRODUCTS
+// SETTINGS (LOGO) - ¡NUEVO!
+// =======================
+app.get("/settings/logo", async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT value FROM settings WHERE key_name = 'site_logo'");
+    res.json({ url: rows.length > 0 ? rows[0].value : null });
+  } catch (err) {
+    console.error("❌ Error obteniendo logo:", err.message);
+    // No fallamos con 500 para no romper el frontend, devolvemos null
+    res.json({ url: null });
+  }
+});
+
+app.post("/settings/logo", async (req, res) => {
+  try {
+    const { url } = req.body;
+    await pool.query(
+      "INSERT INTO settings (key_name, value) VALUES ('site_logo', ?) ON DUPLICATE KEY UPDATE value = ?",
+      [url, url]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ Error guardando logo:", err.message);
+    res.status(500).json({ error: "update failed" });
+  }
+});
+
+// =======================
+// PRODUCT ROUTES
 // =======================
 app.get("/products", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      "SELECT * FROM products ORDER BY id DESC"
-    );
+    const [rows] = await pool.query("SELECT * FROM products ORDER BY id DESC");
     res.json(rows);
   } catch (err) {
     console.error("❌ /products error:", err.message);
@@ -86,117 +112,43 @@ app.get("/products", async (req, res) => {
   }
 });
 
-// =======================
-// CREATE PRODUCT
-// =======================
 app.post("/products", async (req, res) => {
   try {
-    console.log("📥 Recibiendo nuevo producto:", req.body); // Log para depuración
-
-    const {
-      name,
-      description,
-      price,
-      discount,
-      image_main,
-      image_thumb1,
-      image_thumb2,
-      image_thumb3,
-    } = req.body;
-
-    const sql = `
-      INSERT INTO products
-      (name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `;
-
-    const values = [
-      name,
-      description,
-      Number(price) || 0,
-      Number(discount) || 0,
-      image_main || null,
-      image_thumb1 || null,
-      image_thumb2 || null,
-      image_thumb3 || null,
-    ];
+    console.log("📥 Recibiendo nuevo producto:", req.body);
+    const { name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3 } = req.body;
+    
+    const sql = `INSERT INTO products (name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+    const values = [name, description, Number(price)||0, Number(discount)||0, image_main||null, image_thumb1||null, image_thumb2||null, image_thumb3||null];
 
     const [result] = await pool.query(sql, values);
-    console.log("✅ Producto creado con ID:", result.insertId);
     res.json({ success: true, id: result.insertId });
-
   } catch (err) {
     console.error("❌ Error creando producto:", err.message);
     res.status(500).json({ error: "insert failed" });
   }
 });
 
-// =======================
-// UPDATE PRODUCT
-// =======================
 app.put("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    console.log(`📥 Actualizando producto ID ${id}:`, req.body); // Log para depuración
+    console.log(`📥 Actualizando producto ID ${id}:`, req.body);
+    const { name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3 } = req.body;
 
-    const {
-      name,
-      description,
-      price,
-      discount,
-      image_main,
-      image_thumb1,
-      image_thumb2,
-      image_thumb3,
-    } = req.body;
-
-    const sql = `
-      UPDATE products SET
-        name = ?,
-        description = ?,
-        price = ?,
-        discount = ?,
-        image_main = ?,
-        image_thumb1 = ?,
-        image_thumb2 = ?,
-        image_thumb3 = ?
-      WHERE id = ?
-    `;
-
-    const values = [
-      name,
-      description,
-      Number(price) || 0,
-      Number(discount) || 0,
-      image_main || null,
-      image_thumb1 || null,
-      image_thumb2 || null,
-      image_thumb3 || null,
-      id,
-    ];
+    const sql = `UPDATE products SET name=?, description=?, price=?, discount=?, image_main=?, image_thumb1=?, image_thumb2=?, image_thumb3=? WHERE id=?`;
+    const values = [name, description, Number(price)||0, Number(discount)||0, image_main||null, image_thumb1||null, image_thumb2||null, image_thumb3||null, id];
 
     await pool.query(sql, values);
-    console.log(`✅ Producto ID ${id} actualizado`);
     res.json({ success: true });
-
   } catch (err) {
     console.error("❌ Error actualizando producto:", err.message);
     res.status(500).json({ error: "update failed" });
   }
 });
 
-// =======================
-// DELETE PRODUCT
-// =======================
 app.delete("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    console.log(`🗑️ Eliminando producto ID ${id}`);
-    
-    await pool.query(
-      "DELETE FROM products WHERE id = ?",
-      [id]
-    );
+    await pool.query("DELETE FROM products WHERE id = ?", [id]);
     res.json({ success: true });
   } catch (err) {
     console.error("❌ Error eliminando producto:", err.message);
@@ -205,9 +157,16 @@ app.delete("/products/:id", async (req, res) => {
 });
 
 // =======================
-// SERVER
+// SERVER START
 // =======================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log("🚀 Server running on port", PORT);
+});
+
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.log('Puerto ocupado, reintentando...');
+    setTimeout(() => { server.close(); server.listen(PORT); }, 1000);
+  }
 });
