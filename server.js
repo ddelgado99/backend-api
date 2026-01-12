@@ -20,7 +20,7 @@ app.use(express.json());
 // SUPABASE
 // =======================
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
-  console.error("❌ Faltan variables SUPABASE_URL o SUPABASE_SERVICE_KEY");
+  console.error("❌ Faltan SUPABASE_URL o SUPABASE_SERVICE_KEY en .env");
 }
 
 const supabase = createClient(
@@ -37,7 +37,7 @@ const upload = multer({
 });
 
 // =======================
-// HEALTH (Render ping)
+// HEALTH
 // =======================
 app.get("/", (req, res) => {
   res.status(200).json({
@@ -60,7 +60,6 @@ const pool = mysql.createPool({
   password: process.env.MYSQLPASSWORD,
   database: process.env.MYSQLDATABASE,
   port: Number(process.env.MYSQLPORT) || 3306,
-
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -76,7 +75,7 @@ const pool = mysql.createPool({
     conn.release();
     console.log("✅ MySQL pool conectado");
   } catch (err) {
-    console.error("⚠️ MySQL aún no disponible:", err.message);
+    console.error("⚠️ MySQL no disponible:", err.message);
   }
 })();
 
@@ -102,8 +101,12 @@ app.post("/upload-image", upload.single("image"), async (req, res) => {
       return res.status(400).json({ error: "No se envió ninguna imagen" });
     }
 
-    const ext = req.file.originalname.split(".").pop();
-    const fileName = `${Date.now()}-${Math.random()
+    const ext = req.file.originalname.split(".").pop()?.toLowerCase();
+    if (!ext) {
+      return res.status(400).json({ error: "Archivo inválido" });
+    }
+
+    const fileName = `products/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}.${ext}`;
 
@@ -123,10 +126,10 @@ app.post("/upload-image", upload.single("image"), async (req, res) => {
       .from("products")
       .getPublicUrl(fileName);
 
-    return res.json({ url: data.publicUrl });
+    res.json({ url: data.publicUrl });
 
   } catch (err) {
-    console.error("❌ upload-image error:", err);
+    console.error("❌ upload-image error:", err.message);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -151,32 +154,24 @@ app.get("/products", async (req, res) => {
 // =======================
 app.post("/products", async (req, res) => {
   try {
-    const {
-      name,
-      description,
-      price,
-      discount,
-      image_main,
-      image_thumb1,
-      image_thumb2,
-      image_thumb3,
-    } = req.body;
+    const { name, description, price, discount, image_main } = req.body;
+
+    if (!name || !image_main) {
+      return res.status(400).json({ error: "Nombre e imagen son obligatorios" });
+    }
 
     const sql = `
       INSERT INTO products
-      (name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (name, description, price, discount, image_main)
+      VALUES (?, ?, ?, ?, ?)
     `;
 
     const values = [
       name,
-      description,
+      description || "",
       Number(price) || 0,
       Number(discount) || 0,
-      image_main || null,
-      image_thumb1 || null,
-      image_thumb2 || null,
-      image_thumb3 || null,
+      image_main
     ];
 
     const [result] = await pool.query(sql, values);
@@ -194,17 +189,7 @@ app.post("/products", async (req, res) => {
 app.put("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
-
-    const {
-      name,
-      description,
-      price,
-      discount,
-      image_main,
-      image_thumb1,
-      image_thumb2,
-      image_thumb3,
-    } = req.body;
+    const { name, description, price, discount, image_main } = req.body;
 
     const sql = `
       UPDATE products SET
@@ -212,10 +197,7 @@ app.put("/products/:id", async (req, res) => {
         description = ?,
         price = ?,
         discount = ?,
-        image_main = ?,
-        image_thumb1 = ?,
-        image_thumb2 = ?,
-        image_thumb3 = ?
+        image_main = ?
       WHERE id = ?
     `;
 
@@ -224,11 +206,8 @@ app.put("/products/:id", async (req, res) => {
       description,
       Number(price) || 0,
       Number(discount) || 0,
-      image_main || null,
-      image_thumb1 || null,
-      image_thumb2 || null,
-      image_thumb3 || null,
-      id,
+      image_main,
+      id
     ];
 
     await pool.query(sql, values);
