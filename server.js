@@ -14,15 +14,13 @@ import { createClient } from "@supabase/supabase-js";
 // =======================
 const app = express();
 app.use(cors());
-app.use(express.json());
+
+// ⚠️ NO express.json() para multipart
+// app.use(express.json());
 
 // =======================
 // SUPABASE
 // =======================
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
-  console.error("❌ Faltan SUPABASE_URL o SUPABASE_SERVICE_KEY en .env");
-}
-
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
@@ -33,22 +31,7 @@ const supabase = createClient(
 // =======================
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
-});
-
-// =======================
-// HEALTH
-// =======================
-app.get("/", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    message: "🚀 Backend activo",
-    time: new Date().toISOString()
-  });
-});
-
-app.get("/health", (req, res) => {
-  res.status(200).send("ok");
+  limits: { fileSize: 5 * 1024 * 1024 }
 });
 
 // =======================
@@ -61,64 +44,41 @@ const pool = mysql.createPool({
   database: process.env.MYSQLDATABASE,
   port: Number(process.env.MYSQLPORT) || 3306,
   waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
-  enableKeepAlive: true,
-  keepAliveInitialDelay: 10000
-});
-
-// Test inicial MySQL
-(async () => {
-  try {
-    const conn = await pool.getConnection();
-    await conn.ping();
-    conn.release();
-    console.log("✅ MySQL pool conectado");
-  } catch (err) {
-    console.error("⚠️ MySQL no disponible:", err.message);
-  }
-})();
-
-// =======================
-// KEEP DB ALIVE
-// =======================
-app.get("/keep-db-alive", async (req, res) => {
-  try {
-    await pool.query("SELECT 1");
-    res.status(200).send("db alive");
-  } catch (err) {
-    console.error("❌ keep-db-alive error:", err.message);
-    res.status(500).send("db error");
-  }
+  connectionLimit: 10
 });
 
 // =======================
-// UPLOAD IMAGE (SUPABASE)
+// HEALTH
 // =======================
-app.post("/upload-image", upload.single("image"), async (req, res) => {
+app.get("/", (_, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// =======================
+// CREATE PRODUCT + IMAGE
+// =======================
+app.post("/products", upload.single("image"), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No se envió ninguna imagen" });
+    const { name, description = "", price = 0, discount = 0 } = req.body;
+
+    if (!name || !req.file) {
+      return res.status(400).json({ error: "Nombre e imagen obligatorios" });
     }
 
-    const ext = req.file.originalname.split(".").pop()?.toLowerCase();
-    if (!ext) {
-      return res.status(400).json({ error: "Archivo inválido" });
-    }
-
+    // ---- upload image to supabase ----
+    const ext = req.file.originalname.split(".").pop();
     const fileName = `products/${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}.${ext}`;
 
-    const { error } = await supabase.storage
+    const { error: upErr } = await supabase.storage
       .from("products")
       .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: false
+        contentType: req.file.mimetype
       });
 
-    if (error) {
-      console.error("❌ Supabase upload error:", error.message);
+    if (upErr) {
+      console.error(upErr);
       return res.status(500).json({ error: "Upload failed" });
     }
 
@@ -126,119 +86,42 @@ app.post("/upload-image", upload.single("image"), async (req, res) => {
       .from("products")
       .getPublicUrl(fileName);
 
-    res.json({ url: data.publicUrl });
+    const imageUrl = data.publicUrl;
+
+    // ---- insert product ----
+    const [result] = await pool.query(
+      `INSERT INTO products
+       (name, description, price, discount, image_main)
+       VALUES (?, ?, ?, ?, ?)`,
+      [name, description, Number(price), Number(discount), imageUrl]
+    );
+
+    res.json({
+      success: true,
+      id: result.insertId,
+      image: imageUrl
+    });
 
   } catch (err) {
-    console.error("❌ upload-image error:", err.message);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ create product:", err.message);
+    res.status(500).json({ error: "server error" });
   }
 });
 
 // =======================
 // GET PRODUCTS
 // =======================
-app.get("/products", async (req, res) => {
-  try {
-    const [rows] = await pool.query(
-      "SELECT * FROM products ORDER BY id DESC"
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error("❌ /products error:", err.message);
-    res.status(500).json({ error: "database unavailable" });
-  }
-});
-
-// =======================
-// CREATE PRODUCT
-// =======================
-app.post("/products", async (req, res) => {
-  try {
-    const { name, description, price, discount, image_main } = req.body;
-
-    if (!name || !image_main) {
-      return res.status(400).json({ error: "Nombre e imagen son obligatorios" });
-    }
-
-    const sql = `
-      INSERT INTO products
-      (name, description, price, discount, image_main)
-      VALUES (?, ?, ?, ?, ?)
-    `;
-
-    const values = [
-      name,
-      description || "",
-      Number(price) || 0,
-      Number(discount) || 0,
-      image_main
-    ];
-
-    const [result] = await pool.query(sql, values);
-    res.json({ success: true, id: result.insertId });
-
-  } catch (err) {
-    console.error("❌ create product error:", err.message);
-    res.status(500).json({ error: "insert failed" });
-  }
-});
-
-// =======================
-// UPDATE PRODUCT
-// =======================
-app.put("/products/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, description, price, discount, image_main } = req.body;
-
-    const sql = `
-      UPDATE products SET
-        name = ?,
-        description = ?,
-        price = ?,
-        discount = ?,
-        image_main = ?
-      WHERE id = ?
-    `;
-
-    const values = [
-      name,
-      description,
-      Number(price) || 0,
-      Number(discount) || 0,
-      image_main,
-      id
-    ];
-
-    await pool.query(sql, values);
-    res.json({ success: true });
-
-  } catch (err) {
-    console.error("❌ update error:", err.message);
-    res.status(500).json({ error: "update failed" });
-  }
-});
-
-// =======================
-// DELETE PRODUCT
-// =======================
-app.delete("/products/:id", async (req, res) => {
-  try {
-    await pool.query(
-      "DELETE FROM products WHERE id = ?",
-      [req.params.id]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    console.error("❌ delete error:", err.message);
-    res.status(500).json({ error: "delete failed" });
-  }
+app.get("/products", async (_, res) => {
+  const [rows] = await pool.query(
+    "SELECT * FROM products ORDER BY id DESC"
+  );
+  res.json(rows);
 });
 
 // =======================
 // SERVER
 // =======================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
-});
+app.listen(PORT, () =>
+  console.log("🚀 Server running on", PORT)
+);
