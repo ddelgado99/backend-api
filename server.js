@@ -6,8 +6,8 @@ import "dotenv/config";
 import express from "express";
 import mysql from "mysql2/promise";
 import cors from "cors";
-import { createClient } from "@supabase/supabase-js";
 import multer from "multer";
+import { createClient } from "@supabase/supabase-js";
 
 // =======================
 // APP
@@ -19,6 +19,10 @@ app.use(express.json());
 // =======================
 // SUPABASE
 // =======================
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+  console.error("❌ Faltan variables SUPABASE en .env");
+}
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
@@ -48,7 +52,7 @@ app.get("/health", (req, res) => {
 });
 
 // =======================
-// MYSQL POOL (ANTI SLEEP)
+// MYSQL POOL
 // =======================
 const pool = mysql.createPool({
   host: process.env.MYSQLHOST,
@@ -56,6 +60,7 @@ const pool = mysql.createPool({
   password: process.env.MYSQLPASSWORD,
   database: process.env.MYSQLDATABASE,
   port: Number(process.env.MYSQLPORT) || 3306,
+
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -63,7 +68,7 @@ const pool = mysql.createPool({
   keepAliveInitialDelay: 10000
 });
 
-// Test inicial
+// Test inicial MySQL
 (async () => {
   try {
     const conn = await pool.getConnection();
@@ -98,7 +103,9 @@ app.post("/upload-image", upload.single("image"), async (req, res) => {
     }
 
     const ext = req.file.originalname.split(".").pop();
-    const fileName = `products/${Date.now()}.${ext}`;
+    const fileName = `products/${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.${ext}`;
 
     const { error } = await supabase.storage
       .from("products")
@@ -116,7 +123,7 @@ app.post("/upload-image", upload.single("image"), async (req, res) => {
       .from("products")
       .getPublicUrl(fileName);
 
-    res.json({ url: data.publicUrl });
+    return res.json({ url: data.publicUrl });
 
   } catch (err) {
     console.error("❌ upload-image error:", err.message);
