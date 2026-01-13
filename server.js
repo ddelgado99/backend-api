@@ -72,34 +72,6 @@ app.get("/keep-db-alive", async (req, res) => {
 });
 
 // =======================
-// SETTINGS (LOGO) - ¡NUEVO!
-// =======================
-app.get("/settings/logo", async (req, res) => {
-  try {
-    const [rows] = await pool.query("SELECT value FROM settings WHERE key_name = 'site_logo'");
-    res.json({ url: rows.length > 0 ? rows[0].value : null });
-  } catch (err) {
-    console.error("❌ Error obteniendo logo:", err.message);
-    // No fallamos con 500 para no romper el frontend, devolvemos null
-    res.json({ url: null });
-  }
-});
-
-app.post("/settings/logo", async (req, res) => {
-  try {
-    const { url } = req.body;
-    await pool.query(
-      "INSERT INTO settings (key_name, value) VALUES ('site_logo', ?) ON DUPLICATE KEY UPDATE value = ?",
-      [url, url]
-    );
-    res.json({ success: true });
-  } catch (err) {
-    console.error("❌ Error guardando logo:", err.message);
-    res.status(500).json({ error: "update failed" });
-  }
-});
-
-// =======================
 // PRODUCT ROUTES
 // =======================
 app.get("/products", async (req, res) => {
