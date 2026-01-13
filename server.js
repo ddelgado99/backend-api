@@ -19,7 +19,7 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.status(200).json({
     status: "ok",
-    message: "🚀 Backend activo",
+    message: "🚀 Backend activo - DOMBET",
     time: new Date().toISOString()
   });
 });
@@ -74,9 +74,18 @@ app.get("/keep-db-alive", async (req, res) => {
 // =======================
 // PRODUCT ROUTES
 // =======================
+
+// GET: Obtener productos (Incluye cálculo de precio final en SQL)
 app.get("/products", async (req, res) => {
   try {
-    const [rows] = await pool.query("SELECT * FROM products ORDER BY id DESC");
+    // Agregamos la columna virtual 'final_price' calculada directamente desde la DB
+    const sql = `
+      SELECT *, 
+      (price - (price * discount / 100)) AS final_price 
+      FROM products 
+      ORDER BY id DESC
+    `;
+    const [rows] = await pool.query(sql);
     res.json(rows);
   } catch (err) {
     console.error("❌ /products error:", err.message);
@@ -84,13 +93,22 @@ app.get("/products", async (req, res) => {
   }
 });
 
+// POST: Crear producto
 app.post("/products", async (req, res) => {
   try {
     console.log("📥 Recibiendo nuevo producto:", req.body);
     const { name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3 } = req.body;
     
+    // Validaciones básicas
+    let safePrice = Number(price) || 0;
+    let safeDiscount = Number(discount) || 0;
+
+    // Asegurar que el descuento esté entre 0 y 100
+    if (safeDiscount < 0) safeDiscount = 0;
+    if (safeDiscount > 100) safeDiscount = 100;
+
     const sql = `INSERT INTO products (name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-    const values = [name, description, Number(price)||0, Number(discount)||0, image_main||null, image_thumb1||null, image_thumb2||null, image_thumb3||null];
+    const values = [name, description, safePrice, safeDiscount, image_main||null, image_thumb1||null, image_thumb2||null, image_thumb3||null];
 
     const [result] = await pool.query(sql, values);
     res.json({ success: true, id: result.insertId });
@@ -100,14 +118,23 @@ app.post("/products", async (req, res) => {
   }
 });
 
+// PUT: Actualizar producto
 app.put("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
     console.log(`📥 Actualizando producto ID ${id}:`, req.body);
     const { name, description, price, discount, image_main, image_thumb1, image_thumb2, image_thumb3 } = req.body;
 
+    // Validaciones básicas
+    let safePrice = Number(price) || 0;
+    let safeDiscount = Number(discount) || 0;
+
+    // Asegurar que el descuento esté entre 0 y 100
+    if (safeDiscount < 0) safeDiscount = 0;
+    if (safeDiscount > 100) safeDiscount = 100;
+
     const sql = `UPDATE products SET name=?, description=?, price=?, discount=?, image_main=?, image_thumb1=?, image_thumb2=?, image_thumb3=? WHERE id=?`;
-    const values = [name, description, Number(price)||0, Number(discount)||0, image_main||null, image_thumb1||null, image_thumb2||null, image_thumb3||null, id];
+    const values = [name, description, safePrice, safeDiscount, image_main||null, image_thumb1||null, image_thumb2||null, image_thumb3||null, id];
 
     await pool.query(sql, values);
     res.json({ success: true });
@@ -117,6 +144,7 @@ app.put("/products/:id", async (req, res) => {
   }
 });
 
+// DELETE: Eliminar producto
 app.delete("/products/:id", async (req, res) => {
   try {
     const { id } = req.params;
